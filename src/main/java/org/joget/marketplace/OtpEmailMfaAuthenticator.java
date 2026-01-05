@@ -33,7 +33,7 @@ public class OtpEmailMfaAuthenticator extends MfaAuthenticator implements Plugin
     private static final String OTP_KEY = "OTP_EMAIL_CODE";
     private static final String EXPIRY_KEY = "OTP_EMAIL_EXPIRY";
     private static final String MESSAGE_PATH = "messages/OtpEmailMfaAuthenticator";
-            
+
     @Override
     public String getName() {
         return "OTP Email MFA Authenticator";
@@ -41,14 +41,14 @@ public class OtpEmailMfaAuthenticator extends MfaAuthenticator implements Plugin
 
     @Override
     public String getVersion() {
-        return "7.0.2";
+        return "7.0.3";
     }
 
     @Override
     public String getDescription() {
         return "Time-based One-time Password Email Authentication";
     }
-    
+
     @Override
     public String getLabel() {
         return "OTP Email MFA Authenticator";
@@ -63,34 +63,34 @@ public class OtpEmailMfaAuthenticator extends MfaAuthenticator implements Plugin
     public String getPropertyOptions() {
         return AppUtil.readPluginResource(getClassName(), "/properties/OtpEmailMfaAuthenticator.json", null, true, MESSAGE_PATH);
     }
-    
+
     @Override
     public String getKey() {
         return KEY;
     }
-    
+
     @Override
     public String validateOtpUrl(String username) {
         UserMetaDataDao dao = (UserMetaDataDao) AppUtil.getApplicationContext().getBean("userMetaDataDao");
-        
+
         String contextPath = AppUtil.getRequestContextPath();
         String encryptedUsername = SecurityUtil.encrypt(username);
         UserMetaData data = dao.getUserMetaData(username, KEY);
         String nonce = SecurityUtil.generateNonce(new String[]{encryptedUsername, data.getValue()}, 1);
         String url = null;
-        
+
         try {
             url = contextPath + "/web/json/plugin/"+getClassName()+"/service?a=vp&u="+URLEncoder.encode(encryptedUsername, "UTF-8")+"&nonce="+URLEncoder.encode(nonce, "UTF-8");
         } catch (Exception e) {}
-            
+
         return url;
     }
-    
+
     @Override
     public String validateOtpMessage(String username) {
         return ResourceBundleUtil.getMessage("otpEmail.validate");
     }
-    
+
     @Override
     public String activateOtpUrl(String username) {
         return AppUtil.getRequestContextPath() + "/web/json/plugin/"+getClassName()+"/service?a=eotp";
@@ -117,18 +117,18 @@ public class OtpEmailMfaAuthenticator extends MfaAuthenticator implements Plugin
                 content = wsVerifyPinSubmitHandle(model, request, response);
             }
         }
-        
+
         if (content != null && !content.isEmpty()) {
             String css = AppUtil.getUserviewThemeCss();
             String contextPath = request.getContextPath();
-            
+
             if(css.isEmpty()){
                 css = "<link rel=\"stylesheet\" type=\"text/css\" href=\"" + contextPath + "/css/v7.css\"/>";
                 css+= "<link rel=\"stylesheet\" type=\"text/css\" href=\"" + contextPath + "/css/console_custom.css\"/>";
             }
-            
+
             content = css + content;
-            
+
             response.setContentType("text/html");
             PrintWriter writer = response.getWriter();
             writer.write(content);
@@ -136,203 +136,216 @@ public class OtpEmailMfaAuthenticator extends MfaAuthenticator implements Plugin
             response.setStatus(HttpServletResponse.SC_NO_CONTENT);
         }
     }
+
     
+    private int getValidityMinutes() {
+        int minute = 5; 
+
+        try {
+            Object mpfObj = this.getProperty("mpfAuthenticator");
+            if (mpfObj instanceof Map) {
+                Object propsObj = ((Map) mpfObj).get("properties");
+                if (propsObj instanceof Map) {
+                    Object v = ((Map) propsObj).get("validity");
+                    if (v != null) {
+                        minute = Integer.parseInt(v.toString().trim());
+                    }
+                }
+            }
+        } catch (Exception e) {
+        }
+        if (minute < 1) {
+            minute = 1;
+        }
+
+        return minute;
+    }
+
     protected String wsEnableOtpAuthHandle(Map model, HttpServletRequest request, HttpServletResponse response) throws UnsupportedEncodingException {
-        Map mpfProperties = (HashMap)((HashMap)this.getProperty("mpfAuthenticator")).get("properties");
-        
         WorkflowUserManager wum = (WorkflowUserManager) AppUtil.getApplicationContext().getBean("workflowUserManager");
         String username = wum.getCurrentUsername();
-        
+
         UserDao userDao = (UserDao) AppUtil.getApplicationContext().getBean("userDao");
         User user = userDao.getUser(username);
-        
+
         UserMetaDataDao dao = (UserMetaDataDao) AppUtil.getApplicationContext().getBean("userMetaDataDao");
-        
+
         //delete existing usermedata before continue
         dao.deleteUserMetaData(username, OTP_KEY);
         dao.deleteUserMetaData(username, EXPIRY_KEY);
         dao.deleteUserMetaData(username, KEY);
-        
+
         //create new usermedata
         String pin = getRandomOTP();
-        
+
         UserMetaData umOTP = new UserMetaData();
         umOTP.setUsername(username);
         umOTP.setKey(OTP_KEY);
         umOTP.setValue(StringUtil.md5(pin));
         
         dao.addUserMetaData(umOTP);
-        
-        int minute = 5; //default 5mins
-        
-        try{
-            //assume to be used exclusively with SEDM
-            minute = Integer.getInteger((String)mpfProperties.get("validity"));
-        }catch(Exception ex){
-            
-        }
-        
-        long time = System.currentTimeMillis() + minute * 60000;
-        
+
+        int minute = getValidityMinutes();
+        long expiryTime = System.currentTimeMillis() + (long) minute * 60_000L;
+
         UserMetaData umExpiry = new UserMetaData();
         umExpiry.setUsername(username);
         umExpiry.setKey(EXPIRY_KEY);
-        umExpiry.setValue(Long.toString(time));
-        
+        umExpiry.setValue(Long.toString(expiryTime));
         dao.addUserMetaData(umExpiry);
-        
+
         if (wum.isCurrentUserAnonymous()) {
             return getTemplate("unauthorized", model);
         }
-        
-        Map variables = new HashMap();
+
+        Map<String, String> variables = new HashMap<>();
         variables.put("pin", pin);
-        
-        //send first time activation email
-        sendEmail(user, (String)mpfProperties.get("subject"), (String)mpfProperties.get("message"), variables);
-        
+        variables.put("validity", String.valueOf(minute));
+
+        // send first time activation email
+        Map mpfProperties = (HashMap) ((HashMap) this.getProperty("mpfAuthenticator")).get("properties");
+        sendEmail(user, (String) mpfProperties.get("subject"), (String) mpfProperties.get("message"), variables);
+
         return getTemplate("enableOtpAuth", model);
     }
-    
+
     protected String generateOTP(String username){
         String otp = getRandomOTP();
-        
+
         UserMetaDataDao dao = (UserMetaDataDao) AppUtil.getApplicationContext().getBean("userMetaDataDao");
-        
+
         //delete existing usermedata before continue
         dao.deleteUserMetaData(username, EXPIRY_KEY);
         dao.deleteUserMetaData(username, OTP_KEY);
-        
+
         UserMetaData umOTP = new UserMetaData();
         umOTP.setUsername(username);
         umOTP.setKey(OTP_KEY);
         umOTP.setValue(StringUtil.md5(otp));
         
         dao.addUserMetaData(umOTP);
-        
-        int minute = 5; //get plugin config
-        
-        long time = System.currentTimeMillis() + minute * 60000;
-        
+
+        int minute = getValidityMinutes();
+        long expiryTime = System.currentTimeMillis() + (long) minute * 60_000L;
+
         UserMetaData umExpiry = new UserMetaData();
         umExpiry.setUsername(username);
         umExpiry.setKey(EXPIRY_KEY);
-        umExpiry.setValue(Long.toString(time));
-        
+        umExpiry.setValue(Long.toString(expiryTime));
         dao.addUserMetaData(umExpiry);
-        
+
         return otp;
     }
-    
-    protected boolean validateOTP(String username, String code){
-        boolean valid = false;
-        
-        UserMetaDataDao dao = (UserMetaDataDao) AppUtil.getApplicationContext().getBean("userMetaDataDao");
-        UserMetaData um = dao.getUserMetaData(username, OTP_KEY);
-        String savedOTP = um.getValue();
-        
-        um  = dao.getUserMetaData(username, EXPIRY_KEY);
-        long generatedExpiry = Long.parseLong(um.getValue());
-        
-        long currentTime = System.currentTimeMillis();
-        
-        if(savedOTP.equals(StringUtil.md5(code)) && generatedExpiry > currentTime){
-            valid = true;
+
+    protected boolean validateOTP(String username, String code) {
+        try {
+            UserMetaDataDao dao = (UserMetaDataDao) AppUtil.getApplicationContext().getBean("userMetaDataDao");
+
+            UserMetaData umOtp = dao.getUserMetaData(username, OTP_KEY);
+            UserMetaData umExp = dao.getUserMetaData(username, EXPIRY_KEY);
+
+            if (umOtp == null || umExp == null || umOtp.getValue() == null || umExp.getValue() == null) {
+                return false;
+            }
+
+            String savedOTP = umOtp.getValue();
+            long generatedExpiry = Long.parseLong(umExp.getValue());
+            long currentTime = System.currentTimeMillis();
+
+            return savedOTP.equals(StringUtil.md5(code)) && generatedExpiry > currentTime;
+        } catch (Exception e) {
+            return false;
         }
-        
-        return valid;
     }
-    
-    protected String getRandomOTP(){
+
+    protected String getRandomOTP() {
         Random rnd = new Random();
         int number = rnd.nextInt(999999);
-
-        // this will convert any number sequence into 6 character.
         return String.format("%06d", number);
     }
-    
+
     protected String wsEnableOtpAuthSubmitHandle(Map model, HttpServletRequest request, HttpServletResponse response) throws UnsupportedEncodingException {
         WorkflowUserManager wum = (WorkflowUserManager) AppUtil.getApplicationContext().getBean("workflowUserManager");
         String username = wum.getCurrentUsername();
-        
+
         UserMetaDataDao dao = (UserMetaDataDao) AppUtil.getApplicationContext().getBean("userMetaDataDao");
         UserMetaData data = dao.getUserMetaData(username, KEY);
-        
+
         // only allow POST
         if (!"POST".equalsIgnoreCase(request.getMethod()) || wum.isCurrentUserAnonymous() || data != null) {
             return getTemplate("unauthorized", model);
         }
-        
+
         String pin = request.getParameter("pin");
-        
+
         if (pin != null && validateOTP(username, pin)) {
             
             return "<script>parent.updateMFa(\"enabled\");</script>";
         } else {
             model.put("error", ResourceBundleUtil.getMessage("otpEmail.invalid"));
         }
-        
+
         return getTemplate("enableOtpAuth", model);
     }
-    
+
     protected String wsVerifyPinHandle(Map model, HttpServletRequest request, HttpServletResponse response) {
-        Map mpfProperties = (HashMap)((HashMap)this.getProperty("mpfAuthenticator")).get("properties");
-        UserSecurity us = DirectoryUtil.getUserSecurity();
+        Map mpfProperties = (HashMap) ((HashMap) this.getProperty("mpfAuthenticator")).get("properties");
 
         String tempusername = request.getParameter("u");
         if (tempusername != null) {
             UserMetaDataDao dao = (UserMetaDataDao) AppUtil.getApplicationContext().getBean("userMetaDataDao");
-            
+
             String username = SecurityUtil.decrypt(tempusername);
             String nonce = request.getParameter("nonce");
             UserMetaData usecret = dao.getUserMetaData(username, KEY);
-            
+
             UserDao userDao = (UserDao) AppUtil.getApplicationContext().getBean("userDao");
             User user = userDao.getUser(username);
-        
-            if (usecret == null || !SecurityUtil.verifyNonce(nonce, new String[] {tempusername, usecret.getValue()})) {
+
+            if (usecret == null || !SecurityUtil.verifyNonce(nonce, new String[]{tempusername, usecret.getValue()})) {
                 return getTemplate("unauthorized", model);
             }
-            
-            String pin = generateOTP(username);
-            
-            Map variables = new HashMap();
-            variables.put("pin", pin);
 
-            //send login verification code
-            sendEmail(user, (String)mpfProperties.get("subject"), (String)mpfProperties.get("message"), variables);
-            
+            String pin = generateOTP(username);
+
+            Map<String, String> variables = new HashMap<>();
+            variables.put("pin", pin);
+            variables.put("validity", String.valueOf(getValidityMinutes()));
+
+            // send login verification code
+            sendEmail(user, (String) mpfProperties.get("subject"), (String) mpfProperties.get("message"), variables);
+
             model.put("username", tempusername);
             model.put("nonce", nonce);
             try {
-                model.put("url", AppUtil.getRequestContextPath() + "/web/json/plugin/"+getClassName()+"/service?a=vps&u="+URLEncoder.encode(tempusername, "UTF-8")+"&nonce="+URLEncoder.encode(nonce, "UTF-8"));
+                model.put("url", AppUtil.getRequestContextPath() + "/web/json/plugin/" + getClassName() + "/service?a=vps&u="
+                        + URLEncoder.encode(tempusername, "UTF-8") + "&nonce=" + URLEncoder.encode(nonce, "UTF-8"));
             } catch (UnsupportedEncodingException ex) {
+                // ignore
             }
         }
 
         return getTemplate("verifyPin", model);
     }
-    
+
     protected String wsVerifyPinSubmitHandle(Map model, HttpServletRequest request, HttpServletResponse response) throws IOException {
-        UserSecurity us = DirectoryUtil.getUserSecurity();
-        
         String tempusername = request.getParameter("u");
         if (tempusername != null) {
             UserMetaDataDao dao = (UserMetaDataDao) AppUtil.getApplicationContext().getBean("userMetaDataDao");
-            
+
             String username = SecurityUtil.decrypt(tempusername);
             String nonce = request.getParameter("nonce");
             UserMetaData usecret = dao.getUserMetaData(username, KEY);
-            
-            if (usecret == null || !SecurityUtil.verifyNonce(nonce, new String[] {tempusername, usecret.getValue()})) {
+
+            if (usecret == null || !SecurityUtil.verifyNonce(nonce, new String[]{tempusername, usecret.getValue()})) {
                 return getTemplate("unauthorized", model);
             }
-            
+
             try {
                 model.put("url", AppUtil.getRequestContextPath() + "/web/json/plugin/"+getClassName()+"/service?a=vps&u="+URLEncoder.encode(tempusername, "UTF-8")+"&nonce="+URLEncoder.encode(nonce, "UTF-8"));
             } catch (UnsupportedEncodingException ex) {
             }
-            
+
             String pin = request.getParameter("pin");
             if (pin != null && validateOTP(username, pin)) {
                 return loginUser(username);
@@ -340,10 +353,10 @@ public class OtpEmailMfaAuthenticator extends MfaAuthenticator implements Plugin
                 model.put("error", ResourceBundleUtil.getMessage("otpEmail.invalid"));
             }
         }
-        
+
         return getTemplate("verifyPin", model);
     }
-    
+
     @Override
     protected String getTemplate(String template, Map model) {
         // display license page
@@ -351,14 +364,14 @@ public class OtpEmailMfaAuthenticator extends MfaAuthenticator implements Plugin
         String content = pluginManager.getPluginFreeMarkerTemplate(model, getClass().getName(), "/templates/" + template + ".ftl", MESSAGE_PATH);
         return content;
     }
-    
+
     public boolean isSmtpNotConfigured() {
         String smtpHost = getPropertyString("host");
         SetupManager setupManager = (SetupManager)AppUtil.getApplicationContext().getBean("setupManager");
         String sysHost = setupManager.getSettingValue("smtpHost");
         return ((smtpHost == null || smtpHost.isEmpty()) && (sysHost == null || sysHost.isEmpty()));
     }
-    
+
     protected String populateEmailData(String content, User user, Map<String, String> variables) {
         if (user != null) {
             content = content.replace("#username#", (user.getUsername() != null) ? user.getUsername() : "");
@@ -371,17 +384,17 @@ public class OtpEmailMfaAuthenticator extends MfaAuthenticator implements Plugin
             content = content.replace("#timeZone#", (user.getTimeZoneLabel() != null) ? user.getTimeZoneLabel() : "");
             content = content.replace("#active#", (user.getActive() != null) ? user.getActive().toString() : "");
         }
-        
+
         if (variables != null && !variables.isEmpty()) {
             for (String name : variables.keySet()) {
                 content = content.replace("#" + name + "#", variables.get(name));
             }
         }
-        
+
         content = AppUtil.processHashVariable(content, null, null, null);
         return content;
     }
-    
+
     protected void sendEmail(User user, String subject, String message, Map<String, String> variables) {
         if (isSmtpNotConfigured()) {
             LogUtil.warn(EmailTool.class.getName(), "Send email to user " + user.getUsername() + " failed, SMTP host not configured");
@@ -391,7 +404,7 @@ public class OtpEmailMfaAuthenticator extends MfaAuthenticator implements Plugin
                 if (emailSubject != null) {
                     emailSubject = emailSubject.replace("\n", "").replace("\r", "");
                 }
-                
+
                 Map emailProp = new HashMap();
                 emailProp.put("host", getPropertyString("host"));
                 emailProp.put("port", getPropertyString("port"));
