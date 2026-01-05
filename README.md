@@ -1,6 +1,6 @@
 # Description
 
-**OTP Email MFA** is a Multi-factor authentication plugin that sends a one-time password to user's email providing additional layer of security. Read documentation at https://dev.joget.org/community/display/marketplace/One-time+Password+OTP+MFA
+**OTP Email MFA** is a Multi-factor authentication plugin that sends a one-time password to user's email providing additional layer of security. Read documentation at https://kb.joget.org/jw/web/userview/jdocs/docs/marketplace/otp-one-time-password-email-mfa
 
 # Getting Help
 
