@@ -4,7 +4,7 @@
     <groupId>org.joget.marketplace</groupId>
     <artifactId>otp-email-mfa</artifactId>
     <packaging>bundle</packaging>
-    <version>7.0.3</version>
+    <version>7.0.4</version>
     <name>otp-email-mfa</name>
     <url>http://www.joget.org</url>
     <build>

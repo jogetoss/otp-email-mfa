@@ -10,6 +10,7 @@ import java.util.Random;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import org.joget.plugin.property.service.PropertyUtil;
 import org.joget.apps.app.lib.EmailTool;
 import org.joget.apps.app.service.AppUtil;
 import org.joget.apps.app.service.MfaAuthenticator;
@@ -41,7 +42,7 @@ public class OtpEmailMfaAuthenticator extends MfaAuthenticator implements Plugin
 
     @Override
     public String getVersion() {
-        return "7.0.3";
+        return "7.0.4";
     }
 
     @Override
@@ -258,6 +259,24 @@ public class OtpEmailMfaAuthenticator extends MfaAuthenticator implements Plugin
         }
     }
 
+    @Override
+    public void updateUserProfileProcessing(String username, HttpServletRequest request) {
+        String submittedValue = request.getParameter(getKey().toLowerCase());
+
+        if (submittedValue != null && !submittedValue.isEmpty()
+                && !PropertyUtil.PASSWORD_PROTECTED_VALUE.equals(submittedValue)) {
+            // Only allow activation when the current session has verified OTP for this user
+            String sessionKey = "OTP_EMAIL_ACTIVATION_VERIFIED_" + username;
+            Boolean verified = (Boolean) request.getSession().getAttribute(sessionKey);
+            if (verified == null || !verified) {
+                LogUtil.warn(getClassName(), "Blocked unauthorized MFA activation attempt for user: " + username);
+                return;
+            }
+            request.getSession().removeAttribute(sessionKey);
+        }
+        super.updateUserProfileProcessing(username, request);
+    }
+
     protected String getRandomOTP() {
         Random rnd = new Random();
         int number = rnd.nextInt(999999);
@@ -279,7 +298,7 @@ public class OtpEmailMfaAuthenticator extends MfaAuthenticator implements Plugin
         String pin = request.getParameter("pin");
 
         if (pin != null && validateOTP(username, pin)) {
-            
+            request.getSession().setAttribute("OTP_EMAIL_ACTIVATION_VERIFIED_" + username, Boolean.TRUE);
             return "<script>parent.updateMFa(\"enabled\");</script>";
         } else {
             model.put("error", ResourceBundleUtil.getMessage("otpEmail.invalid"));
