@@ -11,6 +11,18 @@
             "value":"5"
          },
          {
+            "name":"mandatoryOtp",
+            "label":"@@otpEmail.mandatoryOtp@@",
+            "type":"checkbox",
+            "description":"@@otpEmail.mandatoryOtp.desc@@",
+            "options":[
+               {
+                  "value":"true",
+                  "label":""
+               }
+            ]
+         },
+         {
             "name":"subject",
             "label":"@@otpEmail.subject@@",
             "type":"textfield",
@@ -34,7 +46,7 @@
                   "label":""
                }
             ]
+               }
+            ]
          }
       ]
-   }
-]

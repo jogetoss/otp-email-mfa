@@ -30,6 +30,7 @@ import org.joget.plugin.base.PluginWebSupport;
 import org.joget.workflow.model.service.WorkflowUserManager;
 
 public class OtpEmailMfaAuthenticator extends MfaAuthenticator implements PluginWebSupport {
+
     private static final String KEY = "OTP_EMAIL";
     private static final String OTP_KEY = "OTP_EMAIL_CODE";
     private static final String EXPIRY_KEY = "OTP_EMAIL_EXPIRY";
@@ -42,7 +43,7 @@ public class OtpEmailMfaAuthenticator extends MfaAuthenticator implements Plugin
 
     @Override
     public String getVersion() {
-        return "7.0.4";
+        return "7.0.5";
     }
 
     @Override
@@ -71,18 +72,74 @@ public class OtpEmailMfaAuthenticator extends MfaAuthenticator implements Plugin
     }
 
     @Override
+    public boolean isOtpRequired(String username) {
+
+        if (isMandatoryOtpEnabled()) {
+            ensureOtpEnrollment(username);
+            return true;
+        }
+
+        UserMetaDataDao dao = (UserMetaDataDao) AppUtil.getApplicationContext().getBean("userMetaDataDao");
+        UserMetaData data = dao.getUserMetaData(username, KEY);
+        return data != null && "enabled".equals(data.getValue());
+    }
+
+    private void ensureOtpEnrollment(String username) {
+        try {
+            UserMetaDataDao dao = (UserMetaDataDao) AppUtil.getApplicationContext().getBean("userMetaDataDao");
+            UserMetaData data = dao.getUserMetaData(username, KEY);
+
+            if (data == null) {
+                UserMetaData meta = new UserMetaData();
+                meta.setUsername(username);
+                meta.setKey(KEY);
+                meta.setValue("enabled");
+                dao.addUserMetaData(meta);
+
+            }
+        } catch (Exception e) {
+            LogUtil.error(getClassName(), e, "Failed to auto-enroll OTP Email MFA for user: " + username);
+        }
+    }
+
+    private boolean isMandatoryOtpEnabled() {
+        boolean mandatory = false;
+        try {
+            UserSecurity us = DirectoryUtil.getUserSecurity();
+            setProperties(us.getProperties());
+
+            Object mpfObj = this.getProperty("mpfAuthenticator");
+            if (mpfObj instanceof Map) {
+                Object propsObj = ((Map) mpfObj).get("properties");
+                if (propsObj instanceof Map) {
+                    Object v = ((Map) propsObj).get("mandatoryOtp");
+                    mandatory = "true".equals(v);
+                }
+            }
+        } catch (Exception e) {
+            LogUtil.error(getClassName(), e, "Failed to read mandatoryOtp property");
+        }
+        return mandatory;
+    }
+
+    @Override
     public String validateOtpUrl(String username) {
         UserMetaDataDao dao = (UserMetaDataDao) AppUtil.getApplicationContext().getBean("userMetaDataDao");
 
         String contextPath = AppUtil.getRequestContextPath();
         String encryptedUsername = SecurityUtil.encrypt(username);
         UserMetaData data = dao.getUserMetaData(username, KEY);
+        if (data == null || data.getValue() == null) {
+
+            return activateOtpUrl(username);
+        }
         String nonce = SecurityUtil.generateNonce(new String[]{encryptedUsername, data.getValue()}, 1);
         String url = null;
 
         try {
-            url = contextPath + "/web/json/plugin/"+getClassName()+"/service?a=vp&u="+URLEncoder.encode(encryptedUsername, "UTF-8")+"&nonce="+URLEncoder.encode(nonce, "UTF-8");
-        } catch (Exception e) {}
+            url = contextPath + "/web/json/plugin/" + getClassName() + "/service?a=vp&u=" + URLEncoder.encode(encryptedUsername, "UTF-8") + "&nonce=" + URLEncoder.encode(nonce, "UTF-8");
+        } catch (Exception e) {
+        }
 
         return url;
     }
@@ -94,7 +151,7 @@ public class OtpEmailMfaAuthenticator extends MfaAuthenticator implements Plugin
 
     @Override
     public String activateOtpUrl(String username) {
-        return AppUtil.getRequestContextPath() + "/web/json/plugin/"+getClassName()+"/service?a=eotp";
+        return AppUtil.getRequestContextPath() + "/web/json/plugin/" + getClassName() + "/service?a=eotp";
     }
 
     @Override
@@ -123,9 +180,9 @@ public class OtpEmailMfaAuthenticator extends MfaAuthenticator implements Plugin
             String css = AppUtil.getUserviewThemeCss();
             String contextPath = request.getContextPath();
 
-            if(css.isEmpty()){
+            if (css.isEmpty()) {
                 css = "<link rel=\"stylesheet\" type=\"text/css\" href=\"" + contextPath + "/css/v7.css\"/>";
-                css+= "<link rel=\"stylesheet\" type=\"text/css\" href=\"" + contextPath + "/css/console_custom.css\"/>";
+                css += "<link rel=\"stylesheet\" type=\"text/css\" href=\"" + contextPath + "/css/console_custom.css\"/>";
             }
 
             content = css + content;
@@ -138,9 +195,8 @@ public class OtpEmailMfaAuthenticator extends MfaAuthenticator implements Plugin
         }
     }
 
-    
     private int getValidityMinutes() {
-        int minute = 5; 
+        int minute = 5;
 
         try {
             Object mpfObj = this.getProperty("mpfAuthenticator");
@@ -183,7 +239,7 @@ public class OtpEmailMfaAuthenticator extends MfaAuthenticator implements Plugin
         umOTP.setUsername(username);
         umOTP.setKey(OTP_KEY);
         umOTP.setValue(StringUtil.md5(pin));
-        
+
         dao.addUserMetaData(umOTP);
 
         int minute = getValidityMinutes();
@@ -210,7 +266,7 @@ public class OtpEmailMfaAuthenticator extends MfaAuthenticator implements Plugin
         return getTemplate("enableOtpAuth", model);
     }
 
-    protected String generateOTP(String username){
+    protected String generateOTP(String username) {
         String otp = getRandomOTP();
 
         UserMetaDataDao dao = (UserMetaDataDao) AppUtil.getApplicationContext().getBean("userMetaDataDao");
@@ -223,7 +279,7 @@ public class OtpEmailMfaAuthenticator extends MfaAuthenticator implements Plugin
         umOTP.setUsername(username);
         umOTP.setKey(OTP_KEY);
         umOTP.setValue(StringUtil.md5(otp));
-        
+
         dao.addUserMetaData(umOTP);
 
         int minute = getValidityMinutes();
@@ -361,7 +417,7 @@ public class OtpEmailMfaAuthenticator extends MfaAuthenticator implements Plugin
             }
 
             try {
-                model.put("url", AppUtil.getRequestContextPath() + "/web/json/plugin/"+getClassName()+"/service?a=vps&u="+URLEncoder.encode(tempusername, "UTF-8")+"&nonce="+URLEncoder.encode(nonce, "UTF-8"));
+                model.put("url", AppUtil.getRequestContextPath() + "/web/json/plugin/" + getClassName() + "/service?a=vps&u=" + URLEncoder.encode(tempusername, "UTF-8") + "&nonce=" + URLEncoder.encode(nonce, "UTF-8"));
             } catch (UnsupportedEncodingException ex) {
             }
 
@@ -386,7 +442,7 @@ public class OtpEmailMfaAuthenticator extends MfaAuthenticator implements Plugin
 
     public boolean isSmtpNotConfigured() {
         String smtpHost = getPropertyString("host");
-        SetupManager setupManager = (SetupManager)AppUtil.getApplicationContext().getBean("setupManager");
+        SetupManager setupManager = (SetupManager) AppUtil.getApplicationContext().getBean("setupManager");
         String sysHost = setupManager.getSettingValue("smtpHost");
         return ((smtpHost == null || smtpHost.isEmpty()) && (sysHost == null || sysHost.isEmpty()));
     }
